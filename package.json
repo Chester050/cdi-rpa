@@ -1,0 +1,17 @@
+{
+  "name": "rpa-mfa-playwright",
+  "version": "1.0.0",
+  "description": "支持短信MFA人工介入的 Playwright RPA Web 应用",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "codegen": "playwright codegen"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.47.0",
+    "ws": "^8.18.0"
+  }
+}
