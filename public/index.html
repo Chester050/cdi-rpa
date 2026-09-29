@@ -30,7 +30,7 @@
     .hidden { display: none; }
     .status { font-size: 13px; padding: 6px 12px; border-radius: 999px; display: inline-block; }
     .status.running { background: #dbeafe; color: #1d4ed8; }
-    .status.waiting_code { background: #fef3c7; color: #b45309; }
+    .status.waiting_code, .status.waiting_email { background: #fef3c7; color: #b45309; }
     .status.done { background: #d1fae5; color: #047857; }
     .status.error { background: #fee2e2; color: #b91c1c; }
     #log {
@@ -49,14 +49,20 @@
     <div class="card">
       <h1>RPA 自动化控制台（MFA）</h1>
 
-      <label>访问令牌</label>
-      <input id="token" type="password" placeholder="与后端 API_TOKEN 一致" autocomplete="off" />
-
       <label>目标站点</label>
       <select id="site"></select>
 
       <button id="startBtn">开始执行 RPA</button>
       <span id="status" class="status hidden"></span>
+    </div>
+
+    <!-- 登录邮箱输入区，收到 NEED_EMAIL 才显示 -->
+    <div id="emailCard" class="card mfa-box hidden">
+      <h1>请输入登录邮箱</h1>
+      <div class="row">
+        <input id="email" type="email" placeholder="someone@example.com" />
+        <button id="submitEmailBtn" class="secondary">提交邮箱</button>
+      </div>
     </div>
 
     <!-- 短信验证码输入区，收到 NEED_SMS_CODE 才显示 -->

@@ -1,4 +1,6 @@
 import { chromium } from 'playwright';
+import { openAsBlob } from 'node:fs';
+import path from 'node:path';
 
 /**
  * 步骤解释器：按配置(steps)依次驱动 Playwright 执行。
@@ -12,6 +14,8 @@ import { chromium } from 'playwright';
  *   waitForUrl      { url, timeout? }              等待 URL 匹配（支持 glob）
  *   waitSmsCode     { selector, submitSelector, successSelector?, errorSelector?, maxRetries?, timeout? }
  *                                                  ★挂起，等待前端输入验证码，支持错误重试
+ *   waitEmail       { input, submit?, timeout? }   ★挂起，等待前端输入登录邮箱，填入 input 并点击 submit
+ *   upload          { url, timeout? }              把上一个 download 保存的文件 POST 到 url（multipart 字段 file）
  *   sleep           { ms }                         等待固定时间
  *   screenshot      { path? }                      截图（调试用）
  */
@@ -29,13 +33,20 @@ export async function runRpa(session, config, vars = {}) {
     session.setStatus('running');
     session.log('启动浏览器...');
     browser = await chromium.launch({ channel: 'chrome', headless: config.headless ?? false });
-    const context = await browser.newContext(); // 每个任务独立上下文，隔离 Cookie
+    // 每个任务独立上下文，隔离 Cookie
+    const context = await browser.newContext(
+      config.httpAuth && runtimeVars.password
+        ? { httpCredentials: { username: runtimeVars.username, password: runtimeVars.password } }
+        : {}
+    );
     const page = await context.newPage();
 
     for (const [index, step] of config.steps.entries()) {
+      if (session.cancelled) throw new Error('任务已取消');
       const label = `步骤 ${index + 1}/${config.steps.length} [${step.action}]`;
       session.log(`${label} ${step.selector || step.url || ''}`);
       await execStep(page, step, session, runtimeVars, config);
+      if (step.milestone) session.milestone(step.milestone);
     }
 
     session.setStatus('done');
@@ -85,6 +96,16 @@ async function execStep(page, step, session, vars, config) {
       break;
     }
 
+    case 'waitEmail': {
+      // 挂起流程，等待 CDI / 前端提供登录邮箱，填入后提交
+      const email = await session.waitForEmail(step.timeout ?? 180_000);
+      session.setStatus('running');
+      vars.username = email;
+      await getLocator(page, step.input).fill(email, { timeout: 30_000 });
+      if (step.submit) await getLocator(page, step.submit).click({ timeout: 30_000 });
+      break;
+    }
+
     case 'download': {
       // 点击某元素触发下载，并保存到指定路径
       const downloadPromise = page.waitForEvent('download', { timeout });
@@ -92,7 +113,19 @@ async function execStep(page, step, session, vars, config) {
       const download = await downloadPromise;
       const savePath = step.path ?? `download-${download.suggestedFilename()}`;
       await download.saveAs(savePath);
+      vars.downloadPath = savePath;
       session.log(`已下载文件: ${savePath}`);
+      break;
+    }
+
+    case 'upload': {
+      // 把上一个 download 步骤保存的文件以 multipart 字段 file 上传
+      if (!vars.downloadPath) throw new Error('upload 前没有已下载的文件');
+      const form = new FormData();
+      form.append('file', await openAsBlob(vars.downloadPath), path.basename(vars.downloadPath));
+      const res = await fetch(step.url, { method: 'POST', body: form, signal: AbortSignal.timeout(timeout) });
+      if (!res.ok) throw new Error(`上传失败: HTTP ${res.status} ${await res.text().catch(() => '')}`);
+      session.log(`已上传文件: ${vars.downloadPath} -> ${step.url}`);
       break;
     }
 

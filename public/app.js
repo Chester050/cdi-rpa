@@ -3,6 +3,8 @@ const $ = (id) => document.getElementById(id);
 const startBtn = $('startBtn');
 const submitCodeBtn = $('submitCodeBtn');
 const mfaCard = $('mfaCard');
+const submitEmailBtn = $('submitEmailBtn');
+const emailCard = $('emailCard');
 const statusEl = $('status');
 const logEl = $('log');
 
@@ -27,6 +29,7 @@ function setStatus(status) {
   statusEl.textContent = {
     running: '执行中',
     waiting_code: '等待验证码',
+    waiting_email: '等待邮箱',
     done: '已完成',
     error: '出错',
   }[status] || status;
@@ -38,16 +41,14 @@ startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   logEl.textContent = '';
   mfaCard.classList.add('hidden');
+  emailCard.classList.add('hidden');
 
   try {
     const res = await fetch('/api/tasks', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + $('token').value.trim(),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        site: $('site').value,
+        taskName: $('site').value,
       }),
     });
     const data = await res.json();
@@ -79,7 +80,14 @@ function connectWs(sessionId, wsToken) {
         if (msg.status === 'done' || msg.status === 'error') {
           startBtn.disabled = false;
           mfaCard.classList.add('hidden');
+          emailCard.classList.add('hidden');
         }
+        break;
+      case 'NEED_EMAIL':
+        emailCard.classList.remove('hidden');
+        $('email').value = '';
+        $('email').focus();
+        appendLog('>>> 需要登录邮箱，请输入 <<<');
         break;
       case 'NEED_SMS_CODE':
         // 2. 后端流程挂起，显示验证码输入框
@@ -122,4 +130,19 @@ submitCodeBtn.addEventListener('click', () => {
 
 $('smsCode').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') submitCodeBtn.click();
+});
+
+// 提交登录邮箱 → 通过 WebSocket 发回后端，唤醒挂起的流程
+submitEmailBtn.addEventListener('click', () => {
+  const email = $('email').value.trim();
+  if (!email) return;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'EMAIL', email }));
+    emailCard.classList.add('hidden');
+    appendLog('已提交邮箱，等待继续...');
+  }
+});
+
+$('email').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitEmailBtn.click();
 });

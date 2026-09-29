@@ -15,7 +15,9 @@ export class RpaSession {
   constructor(id, send) {
     this.id = id;
     this.send = send;
-    this.status = 'created'; // created | running | waiting_code | done | error
+    this.status = 'created'; // created | running | waiting_code | waiting_email | done | error
+    this.cancelled = false;
+    this._waitingFor = null; // 'sms' | 'email'
     this._codeResolver = null;
     this._codeRejecter = null;
     this._codeTimer = null;
@@ -32,6 +34,12 @@ export class RpaSession {
     this.send({ type: 'STATUS', status, ...extra });
   }
 
+  /** 记录业务里程碑（如 portal_opened / logged_in），供 CDI 轮询展示 */
+  milestone(name, detail) {
+    this.log(`里程碑: ${name}${detail ? ` (${detail})` : ''}`);
+    this.send({ type: 'MILESTONE', name, detail });
+  }
+
   /**
    * 挂起流程，等待用户输入短信验证码。
    * @param {number} timeoutMs 超时时间，超时则 reject 以便清理浏览器
@@ -40,22 +48,47 @@ export class RpaSession {
    */
   waitForSmsCode(timeoutMs = 180_000, meta = {}) {
     this.setStatus('waiting_code');
-    this.send({ type: 'NEED_SMS_CODE', ...meta });
-
-    return new Promise((resolve, reject) => {
-      this._codeResolver = resolve;
-      this._codeRejecter = reject;
-      this._codeTimer = setTimeout(() => {
-        this._clearWaiters();
-        reject(new Error('等待验证码超时'));
-      }, timeoutMs);
-    });
+    this.send({ type: 'NEED_SMS_CODE', ...meta, expiresAt: Date.now() + timeoutMs });
+    return this._suspend('sms', timeoutMs, '等待验证码超时');
   }
 
   /** 用户提交验证码时调用，唤醒 waitForSmsCode */
   submitSmsCode(code) {
-    if (this._codeResolver) {
-      this._codeResolver(code);
+    return this._resume('sms', code);
+  }
+
+  /**
+   * 挂起流程，等待用户输入登录邮箱。
+   * @param {number} timeoutMs 超时时间，超时则 reject 以便清理浏览器
+   * @returns {Promise<string>} 用户提交的邮箱
+   */
+  waitForEmail(timeoutMs = 180_000) {
+    this.setStatus('waiting_email');
+    this.send({ type: 'NEED_EMAIL', expiresAt: Date.now() + timeoutMs });
+    return this._suspend('email', timeoutMs, '等待邮箱超时');
+  }
+
+  /** 用户提交邮箱时调用，唤醒 waitForEmail */
+  submitEmail(email) {
+    return this._resume('email', email);
+  }
+
+  // 同一时刻只挂起一种输入；kind 防止验证码被当成邮箱填入（反之亦然）
+  _suspend(kind, timeoutMs, timeoutMessage) {
+    return new Promise((resolve, reject) => {
+      this._waitingFor = kind;
+      this._codeResolver = resolve;
+      this._codeRejecter = reject;
+      this._codeTimer = setTimeout(() => {
+        this._clearWaiters();
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+    });
+  }
+
+  _resume(kind, value) {
+    if (this._codeResolver && this._waitingFor === kind) {
+      this._codeResolver(value);
       this._clearWaiters();
       return true;
     }
@@ -67,10 +100,12 @@ export class RpaSession {
     this._codeTimer = null;
     this._codeResolver = null;
     this._codeRejecter = null;
+    this._waitingFor = null;
   }
 
   /** 会话被销毁时，拒绝掉仍在等待的 Promise，避免流程悬挂 */
   cancel(reason = '会话已取消') {
+    this.cancelled = true;
     if (this._codeRejecter) {
       this._codeRejecter(new Error(reason));
     }

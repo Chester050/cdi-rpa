@@ -11,11 +11,8 @@ import { siteConfigs } from './siteConfigs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 访问令牌：通过环境变量配置，未设置时用开发默认值（仅限本地）
-const API_TOKEN = process.env.API_TOKEN ?? 'dev-token';
-if (API_TOKEN === 'dev-token') {
-  console.warn('[警告] 正在使用默认令牌 dev-token，生产环境请设置环境变量 API_TOKEN');
-}
+// 未指定 site 时默认执行 CDI UAT
+const DEFAULT_SITE = 'cdiUat';
 
 /** 恒定时间比较，避免时序侧信道 */
 function safeEqual(a, b) {
@@ -79,6 +76,14 @@ wss.on('connection', (ws, req) => {
         message: ok ? '验证码已接收' : '当前不在等待验证码状态',
       });
     }
+
+    if (msg.type === 'EMAIL' && typeof msg.email === 'string') {
+      const ok = session.submitEmail(msg.email.trim());
+      session.send({
+        type: 'LOG',
+        message: ok ? '邮箱已接收' : '当前不在等待邮箱状态',
+      });
+    }
   });
 
   ws.on('close', () => {
@@ -86,26 +91,32 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-/** 鉴权中间件：校验 Authorization: Bearer <token> */
-function requireAuth(req, res, next) {
-  const header = req.get('authorization') ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token || !safeEqual(token, API_TOKEN)) {
-    return res.status(401).json({ error: '鉴权失败：令牌无效' });
-  }
-  next();
-}
-
 /**
  * 创建任务：返回 sessionId 与会话专属 wsToken，前端据此建立 WebSocket。
- * 需鉴权。body: { site: 'demo' } —— 凭据由站点配置提供，不由前端传入。
+ * 无需鉴权（测试用）。body: { taskName?, userName?, password? } —— taskName 缺省为 cdiUat。
+ * userName 覆盖站点默认用户名；password 仅在站点 requiredFields 含 password 时使用，否则忽略。
  */
-app.post('/api/tasks', requireAuth, (req, res) => {
-  const { site } = req.body ?? {};
-  const config = siteConfigs[site];
-  if (!config) {
-    return res.status(400).json({ error: `未知站点: ${site}` });
+app.post('/api/tasks', (req, res) => {
+  // 非 JSON 请求体不会被 express.json 解析，taskName 会静默回退到 cdiUat，故显式拒绝
+  if (Number(req.get('content-length') ?? 0) > 0 && !req.is('application/json')) {
+    return res.status(415).json({ error: 'Content-Type 必须为 application/json' });
   }
+
+  const { taskName = DEFAULT_SITE, userName, password } = req.body ?? {};
+  const config = siteConfigs[taskName];
+  if (!config) {
+    return res.status(400).json({ error: `未知任务: ${taskName}` });
+  }
+
+  const requiredFields = config.requiredFields ?? [];
+  const missing = requiredFields.filter((field) => typeof req.body?.[field] !== 'string' || !req.body[field]);
+  if (missing.length) {
+    return res.status(400).json({ error: `缺少字段: ${missing.join(', ')}` });
+  }
+
+  const vars = { ...config.credentials };
+  if (typeof userName === 'string' && userName) vars.username = userName;
+  if (requiredFields.includes('password')) vars.password = password;
 
   const id = randomUUID();
   // send 先用占位，等 WebSocket 连上后再替换
@@ -115,9 +126,9 @@ app.post('/api/tasks', requireAuth, (req, res) => {
 
   res.json({ sessionId: id, wsToken: session.wsToken });
 
-  // 给前端一点时间建立 WS，再启动流程（凭据取自站点配置）
+  // 给前端一点时间建立 WS，再启动流程
   setTimeout(() => {
-    runRpa(session, config, config.credentials ?? {}).finally(() => {
+    runRpa(session, config, vars).finally(() => {
       // 完成后延时清理会话
       setTimeout(() => sessions.delete(id), 60_000);
     });
