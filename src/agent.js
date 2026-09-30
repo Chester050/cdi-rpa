@@ -17,6 +17,10 @@ const AGENT_ID = process.env.RPA_AGENT_ID ?? 'rpa-agent-local';
 const PORT = process.env.RPA_AGENT_PORT ?? 3100;
 // 任务结束后保留记录的时间，让 CDI 能读到最终状态
 const RETENTION_MS = Number(process.env.RPA_RUN_RETENTION_MINUTES ?? 60) * 60_000;
+// 每个任务启动一个 Chrome，限制并发避免内存耗尽
+const MAX_ACTIVE_RUNS = Number(process.env.RPA_MAX_ACTIVE_RUNS ?? 3);
+// 停机时等待任务收尾（关闭浏览器）的上限，需小于容器的停止宽限期（Docker 默认 10s）
+const SHUTDOWN_GRACE_MS = 8_000;
 
 /** 恒定时间比较，避免时序侧信道 */
 function safeEqual(a, b) {
@@ -39,6 +43,12 @@ function requireAgentAuth(req, res, next) {
 const runs = new Map();
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+
+let shuttingDown = false;
+
+function countActiveRuns() {
+  return [...runs.values()].filter((run) => !TERMINAL.has(run.record.status)).length;
+}
 
 function createRecord(runId, siteKey) {
   const now = new Date().toISOString();
@@ -139,6 +149,12 @@ app.post('/agent/runs', (req, res) => {
   if (runs.has(runId)) {
     return res.status(409).json({ error: 'run already exists' });
   }
+  if (shuttingDown) {
+    return res.status(503).json({ error: 'agent is shutting down' });
+  }
+  if (countActiveRuns() >= MAX_ACTIVE_RUNS) {
+    return res.status(429).json({ error: `too many active runs (max ${MAX_ACTIVE_RUNS})` });
+  }
 
   const record = createRecord(runId, taskName);
   const session = new RpaSession(runId, () => {});
@@ -152,7 +168,7 @@ app.post('/agent/runs', (req, res) => {
 
   res.status(202).json({ run_id: runId, agent_id: AGENT_ID });
 
-  runRpa(session, config, vars).finally(() => {
+  runs.get(runId).done = runRpa(session, config, vars).finally(() => {
     setTimeout(() => runs.delete(runId), RETENTION_MS).unref();
   });
 });
@@ -208,10 +224,27 @@ app.post('/agent/runs/:runId/cancel', (req, res) => {
 });
 
 app.get('/agent/health', (_req, res) => {
-  const activeRuns = [...runs.values()].filter((run) => !TERMINAL.has(run.record.status)).length;
-  res.json({ agent_id: AGENT_ID, sites: Object.keys(siteConfigs), active_runs: activeRuns });
+  res.json({ agent_id: AGENT_ID, sites: Object.keys(siteConfigs), active_runs: countActiveRuns() });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`RPA Agent 已启动: http://localhost:${PORT} (agent_id=${AGENT_ID})`);
 });
+
+/** 停机：拒绝新任务，取消进行中的任务，等待浏览器关闭后退出（超时则强制退出） */
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`收到 ${signal}，正在停止 Agent...`);
+  const active = [...runs.values()].filter((run) => !TERMINAL.has(run.record.status));
+  for (const run of active) run.session.cancel('Agent 停机，任务已取消');
+  server.close();
+  await Promise.race([
+    Promise.allSettled(active.map((run) => run.done)),
+    new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS)),
+  ]);
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

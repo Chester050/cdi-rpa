@@ -1,5 +1,7 @@
 import { chromium } from 'playwright';
 import { openAsBlob } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -28,8 +30,12 @@ import path from 'node:path';
 export async function runRpa(session, config, vars = {}) {
   const runtimeVars = { ...vars };
   let browser;
+  let currentStep;
+  let keepBrowserOpen = false;
 
   try {
+    // 每个任务独立下载目录，避免并发任务同名文件互相覆盖；任务结束后删除
+    runtimeVars.downloadDir = await mkdtemp(path.join(os.tmpdir(), 'rpa-'));
     session.setStatus('running');
     session.log('启动浏览器...');
     browser = await chromium.launch({ channel: 'chrome', headless: config.headless ?? false });
@@ -42,6 +48,7 @@ export async function runRpa(session, config, vars = {}) {
     const page = await context.newPage();
 
     for (const [index, step] of config.steps.entries()) {
+      currentStep = step;
       if (session.cancelled) throw new Error('任务已取消');
       const label = `步骤 ${index + 1}/${config.steps.length} [${step.action}]`;
       session.log(`${label} ${step.selector || step.url || ''}`);
@@ -53,14 +60,21 @@ export async function runRpa(session, config, vars = {}) {
     session.log('任务完成 ✅');
     return { ok: true };
   } catch (err) {
+    // MFA 失败（超时/验证码错误/取消）时保留浏览器，便于人工在该页面继续完成登录
+    keepBrowserOpen = Boolean(config.keepOpenOnMfaFail) && currentStep?.action === 'waitSmsCode';
     session.setStatus('error', { message: err.message });
     session.log(`任务失败 ❌: ${err.message}`);
     return { ok: false, error: err.message };
   } finally {
-    if (browser) {
+    if (browser && keepBrowserOpen) {
+      session.log('MFA 失败，浏览器保持打开');
+    } else if (browser) {
       // 稍等便于观察，然后回收浏览器实例
       await browser.close().catch(() => {});
       session.log('浏览器已关闭');
+    }
+    if (runtimeVars.downloadDir) {
+      await rm(runtimeVars.downloadDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 }
@@ -111,7 +125,7 @@ async function execStep(page, step, session, vars, config) {
       const downloadPromise = page.waitForEvent('download', { timeout });
       await getLocator(page, step).click({ timeout });
       const download = await downloadPromise;
-      const savePath = step.path ?? `download-${download.suggestedFilename()}`;
+      const savePath = step.path ?? path.join(vars.downloadDir, download.suggestedFilename());
       await download.saveAs(savePath);
       vars.downloadPath = savePath;
       session.log(`已下载文件: ${savePath}`);

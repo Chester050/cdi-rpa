@@ -116,7 +116,9 @@ export const siteConfigs = {
   // === Amazon Vendor Central (JP) 登录 ===
   lijuan_amazon: {
     url: "https://vendorcentral.amazon.co.jp/ap/signin",
-    headless: true,
+    headless: false,
+    // MFA 步骤失败时不关闭浏览器，便于人工接手
+    keepOpenOnMfaFail: true,
     // 凭据由 API 请求体 userName / password 提供
     requiredFields: ["userName", "password"],
     steps: [
@@ -127,18 +129,54 @@ export const siteConfigs = {
       { action: "fill", role: "textbox", name: "Password", valueRef: "password" },
       { action: "click", role: "button", name: "Sign in", milestone: "credentials_entered" },
 
-      // 以下 MFA 选择器为 Amazon 通用 2SV（auth-mfa-otpcode）/ CVF（name="code"）页面的 id，尚未在该账号上实测验证。
-      // 该账号 MFA 为短信 OTP。先等 OTP 输入框出现，CDI 才会看到 waiting_mfa；选择器不匹配时此处 30s 超时 → failed。
-      { action: "waitForSelector", selector: "#auth-mfa-otpcode, input[name='code']", timeout: 30000 },
+      // 该账号 MFA 为短信 OTP，输入框/按钮取自 codegen 录制。与 cdiUat 的 waitEmail 一致：Sign in 后立即挂起，
+      // CDI 看到 waiting_mfa 并提交验证码后再填入。errorSelector 为 Amazon 通用错误框 id，尚未实测。
       {
         action: "waitSmsCode",
-        selector: "#auth-mfa-otpcode, input[name='code']",
-        submitSelector: "#auth-signin-button, #cvf-submit-otp-button input",
+        input: { role: "textbox", name: "Enter code:" },
+        submit: { role: "button", name: "Sign in" },
         errorSelector: "#auth-error-message-box",
-        maxRetries: 3,
+        maxRetries: 1,
         timeout: 180000,
         milestone: "logged_in",
       },
+
+      // 选择账号 Lenovo Japan
+      { action: "click", role: "img", name: "Close" },
+      { action: "click", role: "button", name: "Lenovo Japan" },
+      { action: "click", role: "button", name: "JP - Lenovo Japan" },
+      { action: "click", role: "button", name: "Select account" },
+      { action: "click", role: "button", name: "Close welcome modal" },
+
+      // Retail Analytics → Sales，导出 Excel
+      { action: "click", role: "button", name: "Navigation menu" },
+      { action: "click", role: "link", name: "Retail Analytics Add page to" },
+      { action: "click", role: "link", name: "Sales", exact: true },
+      { action: "click", role: "button", name: "Apply" },
+      { action: "click", role: "button", name: "Excel" },
+      { action: "click", text: "View and manage your" },
+      // 文件名含报表日期和生成时间，每次不同：取下载列表第一行（含 .xlsx 的行，排除表头）
+      {
+        action: "download",
+        selector: "role=row[name=/\\.xlsx/] >> nth=0 >> role=link",
+        timeout: 120000,
+        milestone: "file_downloaded",
+      },
+      // TEMP：CDI 本地测试接收接口（无鉴权），待 ingestion 上传实现后替换
+      { action: "upload", url: "http://localhost:5174/api/v1/reporting-rpa/test-download" },
+
+      // Inventory，导出 Excel
+      { action: "click", role: "link", name: "Inventory" },
+      { action: "click", role: "button", name: "Apply" },
+      { action: "click", role: "button", name: "Excel" },
+      { action: "click", text: "View and manage your" },
+      {
+        action: "download",
+        selector: "role=row[name=/\\.xlsx/] >> nth=0 >> role=link",
+        timeout: 120000,
+        milestone: "file_downloaded",
+      },
+      { action: "upload", url: "http://localhost:5174/api/v1/reporting-rpa/test-download" },
     ],
   },
 

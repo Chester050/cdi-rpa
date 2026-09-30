@@ -1,4 +1,4 @@
-# Runtime secrets (RPA_AGENT_TOKEN, CDI_API_TOKEN, CDI_UAT_USERNAME, CDI_UAT_PASSWORD, ...)
+# Runtime secrets (RPA_AGENT_TOKEN, CDI_UAT_USERNAME, CDI_UAT_PASSWORD, ...)
 # come from Settings > CI/CD > Variables. See .env.example for the full list.
 
 # Playwright image already has Node and Chromium's Linux libs; version matches package-lock.json.

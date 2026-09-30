@@ -29,8 +29,7 @@ The package does not define a test script or test framework. There is consequent
 
 Runtime secrets are never committed. `.env.example` lists every variable the code reads; locally, copy it to `.env` (loaded by `--env-file-if-exists`), and in GitLab, add each one under **Settings → CI/CD → Variables**, marking tokens and passwords as Masked:
 
-- `RPA_AGENT_TOKEN` (optional; overrides the fixed token in `src/agent.js`, which must match csd-ai-service `RPA_AGENT_TOKEN`), `RPA_AGENT_PORT`, `RPA_AGENT_ID`, `RPA_RUN_RETENTION_MINUTES`.
-- `CDI_BASE_URL`, `CDI_API_TOKEN` for run-event reporting to CDI.
+- `RPA_AGENT_TOKEN` (optional; overrides the fixed token in `src/agent.js`, which must match csd-ai-service `RPA_AGENT_TOKEN`), `RPA_AGENT_PORT`, `RPA_AGENT_ID`, `RPA_RUN_RETENTION_MINUTES`, `RPA_MAX_ACTIVE_RUNS` (default `3`).
 - Site credentials such as `CDI_UAT_USERNAME` and `CDI_UAT_PASSWORD`. When a new site adds an env-backed credential, add it to `.env.example` and the GitLab variables.
 
 To deploy: push to the GitLab repo, let `build` pass, set the variables, then trigger `run-agent` from **CI/CD → Pipelines**. The `run-agent` job is long-running and bound by the job timeout, and it does not expose the port to CDI on its own; a persistent host or container deployment must reuse the same install and start commands.
@@ -45,14 +44,12 @@ To deploy: push to the GitLab repo, let `build` pass, set the variables, then tr
 
 `src/agent.js` provides the CDI-facing agent API on `RPA_AGENT_PORT` (default `3100`). Every `/agent/**` endpoint requires `Authorization: Bearer <token>`, where the token is the fixed value in `src/agent.js` unless `RPA_AGENT_TOKEN` overrides it:
 
-- `POST /agent/runs` accepts `{ "run_id", "taskName", "userName?", "password?", "ingestion?" }` and starts a run. Field semantics match `POST /api/tasks`: `taskName` is a `siteConfigs` key, and the site's `requiredFields` are enforced with 400. `ingestion` is accepted but not used yet.
+- `POST /agent/runs` accepts `{ "run_id", "taskName", "userName?", "password?", "ingestion?" }` and starts a run. Field semantics match `POST /api/tasks`: `taskName` is a `siteConfigs` key, and the site's `requiredFields` are enforced with 400. Returns 429 when `RPA_MAX_ACTIVE_RUNS` runs are already active, and 503 while the agent is shutting down (SIGTERM/SIGINT cancels active runs and closes their browsers before exit). `ingestion` is accepted but not used yet.
 - `GET /agent/runs/:runId` returns a run status snapshot.
 - `POST /agent/runs/:runId/mfa-code` accepts `{ "code": "<4-10 digit code>" }`.
 - `POST /agent/runs/:runId/email` accepts `{ "email": "<email>" }` while the run is `waiting_email` (sites with a `waitEmail` step, e.g. `cdiUat`); 409 otherwise.
 - `POST /agent/runs/:runId/cancel` requests cancellation after the current step.
 - `GET /agent/health` returns the agent ID, configured sites, and active-run count.
-
-`src/cdiClient.js` is an outbound client, not a local endpoint. When `CDI_BASE_URL` is configured, it posts run events to `POST {CDI_BASE_URL}/api/v1/reporting-rpa/agent/runs/:runId/events` with `Authorization: Bearer <CDI_API_TOKEN>`.
 
 ## Coding Style & Naming Conventions
 
