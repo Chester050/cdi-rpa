@@ -11,12 +11,8 @@ import { siteConfigs } from './siteConfigs.js';
  * Agent 不主动调用 CDI。server.js（本地调试 UI + WS）保持不变。
  */
 
-// 该端口对 CDI 开放，不提供默认令牌
-const AGENT_TOKEN = process.env.RPA_AGENT_TOKEN;
-if (!AGENT_TOKEN) {
-  console.error('[错误] 未设置环境变量 RPA_AGENT_TOKEN，Agent 拒绝启动');
-  process.exit(1);
-}
+// 该端口对 CDI 开放；固定令牌须与 csd-ai-service 的 RPA_AGENT_TOKEN 一致，环境变量可覆盖（本地联调用）
+const AGENT_TOKEN = process.env.RPA_AGENT_TOKEN || '47dfec45493677836284849a978d14c64b57694bdaae47baacaeef810ab67776';
 const AGENT_ID = process.env.RPA_AGENT_ID ?? 'rpa-agent-local';
 const PORT = process.env.RPA_AGENT_PORT ?? 3100;
 // 任务结束后保留记录的时间，让 CDI 能读到最终状态
@@ -119,13 +115,13 @@ function createRecorder(session, record) {
 
 const app = express();
 app.use(express.json());
+app.use('/agent', requireAgentAuth);
 
 /**
  * 启动任务。body: { run_id, taskName, userName?, password?, ingestion? }
  * 字段与 server.js /api/tasks 一致：taskName 为 siteConfigs 的键，站点 requiredFields 缺失则 400。
  * userName 缺省时回退到站点配置里的 credentials（本地联调用）。ingestion 暂未使用（上传待实现）。
  */
-// TEMP: no auth for local testing; restore requireAgentAuth before live.
 app.post('/agent/runs', (req, res) => {
   const { run_id: runId, taskName, userName, password } = req.body ?? {};
   if (typeof runId !== 'string' || !runId) {
@@ -162,7 +158,6 @@ app.post('/agent/runs', (req, res) => {
 });
 
 /** 查询任务状态（CDI 在任务进行中轮询） */
-// TEMP: no auth for local testing; restore requireAgentAuth before live.
 app.get('/agent/runs/:runId', (req, res) => {
   const run = runs.get(req.params.runId);
   if (!run) return res.status(404).json({ error: 'run not found' });
@@ -170,7 +165,6 @@ app.get('/agent/runs/:runId', (req, res) => {
 });
 
 /** 提交短信验证码。body: { code } */
-// TEMP: no auth for local testing; restore requireAgentAuth before live.
 app.post('/agent/runs/:runId/mfa-code', (req, res) => {
   const run = runs.get(req.params.runId);
   if (!run) return res.status(404).json({ error: 'run not found' });
@@ -187,7 +181,6 @@ app.post('/agent/runs/:runId/mfa-code', (req, res) => {
 });
 
 /** 提交登录邮箱（站点含 waitEmail 步骤时）。body: { email } */
-// TEMP: no auth for local testing; restore requireAgentAuth before live.
 app.post('/agent/runs/:runId/email', (req, res) => {
   const run = runs.get(req.params.runId);
   if (!run) return res.status(404).json({ error: 'run not found' });
@@ -204,7 +197,6 @@ app.post('/agent/runs/:runId/email', (req, res) => {
 });
 
 /** 取消任务：当前步骤结束后终止，状态变为 cancelled */
-// TEMP: no auth for local testing; restore requireAgentAuth before live.
 app.post('/agent/runs/:runId/cancel', (req, res) => {
   const run = runs.get(req.params.runId);
   if (!run) return res.status(404).json({ error: 'run not found' });
@@ -215,7 +207,7 @@ app.post('/agent/runs/:runId/cancel', (req, res) => {
   res.status(202).end();
 });
 
-app.get('/agent/health', requireAgentAuth, (_req, res) => {
+app.get('/agent/health', (_req, res) => {
   const activeRuns = [...runs.values()].filter((run) => !TERMINAL.has(run.record.status)).length;
   res.json({ agent_id: AGENT_ID, sites: Object.keys(siteConfigs), active_runs: activeRuns });
 });

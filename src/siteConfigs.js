@@ -21,7 +21,7 @@ export const siteConfigs = {
   // === GitHub 登录 + 验证码 + 下载仓库 ZIP ===
   github: {
     url: 'https://github.com/',
-    headless: false,
+    headless: true,
     // 凭据直接由配置提供（从环境变量读取，避免明文写入文件）。
     // 运行前设置：$env:GITHUB_USERNAME / $env:GITHUB_PASSWORD
     credentials: {
@@ -116,7 +116,7 @@ export const siteConfigs = {
   // === Amazon Vendor Central (JP) 登录 ===
   lijuan_amazon: {
     url: "https://vendorcentral.amazon.co.jp/ap/signin",
-    headless: false,
+    headless: true,
     // 凭据由 API 请求体 userName / password 提供
     requiredFields: ["userName", "password"],
     steps: [
@@ -146,7 +146,7 @@ export const siteConfigs = {
   // === 通用示例（CSS 选择器风格） ===
   demo: {
     url: 'https://example.com/login',
-    headless: false,
+    headless: true,
     steps: [
       { action: 'goto' },
       { action: 'fill', selector: '#username', valueRef: 'username' },

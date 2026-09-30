@@ -1,0 +1,39 @@
+# Runtime secrets (RPA_AGENT_TOKEN, CDI_API_TOKEN, CDI_UAT_USERNAME, CDI_UAT_PASSWORD, ...)
+# come from Settings > CI/CD > Variables. See .env.example for the full list.
+
+# Playwright image already has Node and Chromium's Linux libs; version matches package-lock.json.
+image: mcr.microsoft.com/playwright:v1.63.0-noble
+
+stages:
+  - build
+  - deploy
+
+variables:
+  RPA_AGENT_PORT: "3100"
+
+cache:
+  key:
+    files:
+      - package-lock.json
+  paths:
+    - .npm/
+
+before_script:
+  # Install dependencies
+  - npm ci --cache .npm --prefer-offline
+  # Install browser driver: runner launches channel 'chrome', so install Google Chrome (not bundled Chromium)
+  - npx playwright install --with-deps chrome
+
+build:
+  stage: build
+  script:
+    - node --check src/agent.js
+    - node --check src/rpaRunner.js
+    - node --check src/siteConfigs.js
+
+run-agent:
+  stage: deploy
+  when: manual
+  # Start command. Long-running: the job stays alive while the agent serves CDI.
+  script:
+    - npm run agent
